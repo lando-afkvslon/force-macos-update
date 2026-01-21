@@ -139,19 +139,42 @@ PROGRESSSCRIPT
 chmod +x "$PROGRESS_SCRIPT"
 log "[OK] Progress viewer script created"
 
-# --- OPEN TERMINAL WINDOW WITH PROGRESS ---
-log "[INFO] Opening Terminal window to show download progress..."
+# --- CREATE LAUNCHAGENT TO OPEN TERMINAL (runs in user context with GUI access) ---
+log "[INFO] Creating LaunchAgent to show download progress..."
 
-if [ -n "$CURRENT_USER_UID" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
-    # Use osascript to open Terminal with the progress script
-    launchctl asuser "$CURRENT_USER_UID" sudo -u "$CURRENT_USER" osascript << EOF
-tell application "Terminal"
-    activate
-    do script "/usr/local/bin/force-macos-update-progress.sh"
-    set bounds of front window to {100, 100, 900, 600}
-end tell
+LAUNCHAGENT_PLIST="/Library/LaunchAgents/com.force-macos-update.progress.plist"
+
+cat > "$LAUNCHAGENT_PLIST" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.force-macos-update.progress</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/open</string>
+        <string>-a</string>
+        <string>Terminal</string>
+        <string>/usr/local/bin/force-macos-update-progress.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LaunchOnlyOnce</key>
+    <true/>
+</dict>
+</plist>
 EOF
-    log "[OK] Terminal window opened for user"
+
+chmod 644 "$LAUNCHAGENT_PLIST"
+chown root:wheel "$LAUNCHAGENT_PLIST"
+log "[OK] LaunchAgent plist created"
+
+# Load LaunchAgent for the current user
+if [ -n "$CURRENT_USER_UID" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
+    # Load into user's GUI session
+    launchctl asuser "$CURRENT_USER_UID" launchctl load "$LAUNCHAGENT_PLIST" 2>&1 | tee -a "$LOG"
+    log "[OK] LaunchAgent loaded for user - Terminal window should open"
 fi
 
 # --- CREATE DOWNLOAD SCRIPT ---
@@ -294,12 +317,15 @@ else
 Please contact IT support." with title "macOS Update Error" buttons {"OK"} default button "OK"' 2>/dev/null
 fi
 
-# Clean up LaunchDaemon (but leave progress script for reference)
+# Clean up LaunchDaemon and LaunchAgent
 echo "" >> "$LOG"
 echo "[INFO] Cleaning up..." >> "$LOG"
 launchctl unload /Library/LaunchDaemons/com.force-macos-update.download.plist 2>/dev/null
+launchctl unload /Library/LaunchAgents/com.force-macos-update.progress.plist 2>/dev/null
 rm -f /Library/LaunchDaemons/com.force-macos-update.download.plist 2>/dev/null
+rm -f /Library/LaunchAgents/com.force-macos-update.progress.plist 2>/dev/null
 rm -f /usr/local/bin/force-macos-update-download.sh 2>/dev/null
+rm -f /usr/local/bin/force-macos-update-progress.sh 2>/dev/null
 echo "[OK] Done! You can close this window." >> "$LOG"
 DOWNLOADSCRIPT
 
