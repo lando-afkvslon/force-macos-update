@@ -9,9 +9,6 @@ DOWNLOAD_LOG="/var/log/force-macos-update-download.log"
 DOWNLOAD_SCRIPT="/usr/local/bin/force-macos-update-download.sh"
 LAUNCHDAEMON_PLIST="/Library/LaunchDaemons/com.force-macos-update.download.plist"
 
-# Get current logged-in user
-CURRENT_USER=$(stat -f "%Su" /dev/console)
-
 # Function to log to both stdout (for Rippling) and log file
 log() {
     echo "$1"
@@ -19,19 +16,42 @@ log() {
 }
 
 log "=== Force macOS Update Started: $(date) ==="
-log "[INFO] Current user: $CURRENT_USER"
+
+# --- VERIFY ROOT PERMISSIONS ---
+if [ "$(id -u)" -ne 0 ]; then
+    log "[ERROR] This script must be run as root!"
+    log "[ERROR] Current user: $(whoami) (UID: $(id -u))"
+    exit 1
+fi
+log "[OK] Running as root (UID: $(id -u))"
+
+# Get current logged-in user and their UID
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+CURRENT_USER_UID=$(id -u "$CURRENT_USER" 2>/dev/null)
+log "[INFO] Console user: $CURRENT_USER (UID: $CURRENT_USER_UID)"
 
 # Get current macOS version
 CURRENT_VERSION=$(sw_vers -productVersion)
 log "[INFO] Current macOS version: $CURRENT_VERSION"
+
+# Function to run command as the logged-in user (for GUI operations)
+run_as_user() {
+    if [ -n "$CURRENT_USER_UID" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ] && [ "$CURRENT_USER" != "_mbsetupuser" ]; then
+        launchctl asuser "$CURRENT_USER_UID" sudo -u "$CURRENT_USER" "$@"
+    fi
+}
+
+# --- TEST GUI ACCESS ---
+log "[INFO] Testing GUI access for user notifications..."
+run_as_user osascript -e 'display notification "macOS Update script starting..." with title "IT Update"' 2>&1 | tee -a "$LOG"
+log "[OK] GUI notification test sent"
 
 # --- REMOVE UPDATE BLOCKERS AND RESTRICTIONS ---
 log "[INFO] Checking for update blockers and restrictions..."
 
 # List current profiles
 log "[INFO] Current configuration profiles:"
-PROFILES=$(profiles list 2>&1)
-log "$PROFILES"
+profiles list 2>&1 | tee -a "$LOG"
 
 # Remove deferral settings
 log "[INFO] Removing update deferral settings..."
@@ -99,6 +119,11 @@ log ""
 log "$AVAILABLE"
 log ""
 
+# --- OPEN SYSTEM SETTINGS NOW (before background process) ---
+log "[INFO] Opening System Settings > Software Update..."
+run_as_user open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>&1 | tee -a "$LOG"
+log "[OK] System Settings open command sent"
+
 # --- CREATE DOWNLOAD SCRIPT ---
 log "[INFO] Creating persistent download script..."
 
@@ -107,19 +132,32 @@ mkdir -p /usr/local/bin
 cat > "$DOWNLOAD_SCRIPT" << 'DOWNLOADSCRIPT'
 #!/bin/bash
 LOG="/var/log/force-macos-update-download.log"
-CURRENT_USER=$(stat -f "%Su" /dev/console)
 
 echo "=== macOS Update Download Started: $(date) ===" > "$LOG"
-echo "[INFO] Running as: $(whoami)" >> "$LOG"
-echo "[INFO] Current console user: $CURRENT_USER" >> "$LOG"
+echo "[INFO] Running as: $(whoami) (UID: $(id -u))" >> "$LOG"
 
-# Send notification to user that download is starting
-if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
-    sudo -u "$CURRENT_USER" osascript -e 'display notification "Downloading macOS upgrade. This may take 30-60 minutes." with title "macOS Update"' 2>/dev/null
+# Get current console user and UID
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+CURRENT_USER_UID=$(id -u "$CURRENT_USER" 2>/dev/null)
+echo "[INFO] Console user: $CURRENT_USER (UID: $CURRENT_USER_UID)" >> "$LOG"
 
-    # Open System Settings
-    sudo -u "$CURRENT_USER" open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>/dev/null
-fi
+# Function to run as user for GUI
+run_as_user() {
+    if [ -n "$CURRENT_USER_UID" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ] && [ "$CURRENT_USER" != "_mbsetupuser" ]; then
+        launchctl asuser "$CURRENT_USER_UID" sudo -u "$CURRENT_USER" "$@"
+    fi
+}
+
+# Notify user download is starting
+echo "[INFO] Sending start notification to user..." >> "$LOG"
+run_as_user osascript -e 'display notification "Downloading macOS upgrade. This may take 30-60 minutes. Do not shut down your Mac." with title "macOS Update"' 2>&1 >> "$LOG"
+
+# Open System Settings
+echo "[INFO] Opening System Settings..." >> "$LOG"
+run_as_user open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>&1 >> "$LOG"
+
+# Small delay to let notification show
+sleep 2
 
 # Check for incremental updates first
 echo "[INFO] Checking for updates..." >> "$LOG"
@@ -127,68 +165,85 @@ AVAILABLE=$(softwareupdate -l 2>&1)
 echo "$AVAILABLE" >> "$LOG"
 
 if echo "$AVAILABLE" | grep -q "No new software available"; then
-    echo "[INFO] No incremental updates - downloading full installer..." >> "$LOG"
+    echo "" >> "$LOG"
+    echo "[INFO] No incremental updates found" >> "$LOG"
+    echo "[INFO] Downloading full macOS installer..." >> "$LOG"
+    echo "[INFO] This will take 30-60 minutes..." >> "$LOG"
+    echo "" >> "$LOG"
 
     # Download full installer
-    echo "[INFO] Starting softwareupdate --fetch-full-installer..." >> "$LOG"
     softwareupdate --fetch-full-installer 2>&1 | tee -a "$LOG"
     EXIT_CODE=${PIPESTATUS[0]}
+    echo "" >> "$LOG"
     echo "[INFO] softwareupdate exit code: $EXIT_CODE" >> "$LOG"
 else
+    echo "" >> "$LOG"
     echo "[INFO] Incremental updates found - downloading..." >> "$LOG"
+    echo "" >> "$LOG"
     softwareupdate --download --all --force 2>&1 | tee -a "$LOG"
     EXIT_CODE=${PIPESTATUS[0]}
+    echo "" >> "$LOG"
     echo "[INFO] softwareupdate exit code: $EXIT_CODE" >> "$LOG"
 fi
 
 echo "" >> "$LOG"
 echo "=== Download Finished: $(date) ===" >> "$LOG"
 
+# Re-get user in case they logged out/in during download
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+CURRENT_USER_UID=$(id -u "$CURRENT_USER" 2>/dev/null)
+
 # Check results and notify user
-INSTALLER=$(ls -d /Applications/Install\ macOS*.app 2>/dev/null | head -1)
+INSTALLER=$(ls -dt /Applications/Install\ macOS*.app 2>/dev/null | head -1)
 
 if [ -n "$INSTALLER" ]; then
     INSTALLER_NAME=$(basename "$INSTALLER" .app)
     echo "[OK] SUCCESS - Found installer: $INSTALLER" >> "$LOG"
 
-    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
-        sudo -u "$CURRENT_USER" osascript -e "display dialog \"macOS upgrade is ready!
+    # Show completion dialog
+    echo "[INFO] Showing completion dialog..." >> "$LOG"
+    run_as_user osascript -e "display dialog \"macOS upgrade is ready!
 
-Open the installer in your Applications folder:
+The installer has been downloaded to your Applications folder:
 $INSTALLER_NAME
 
-Your Mac will restart during the upgrade.\" with title \"macOS Update Ready\" buttons {\"Open Applications\", \"Later\"} default button \"Open Applications\"" 2>/dev/null
+To install:
+1. Open Finder → Applications
+2. Double-click '$INSTALLER_NAME'
+3. Follow the prompts
 
-        if [ $? -eq 0 ]; then
-            sudo -u "$CURRENT_USER" open /Applications 2>/dev/null
-        fi
+Your Mac will restart during the upgrade.\" with title \"macOS Update Ready\" buttons {\"Open Applications\", \"Later\"} default button \"Open Applications\"" 2>&1 >> "$LOG"
+
+    DIALOG_RESULT=$?
+    echo "[INFO] Dialog result: $DIALOG_RESULT" >> "$LOG"
+
+    if [ $DIALOG_RESULT -eq 0 ]; then
+        run_as_user open /Applications 2>&1 >> "$LOG"
     fi
+
 elif [ $EXIT_CODE -eq 0 ]; then
     echo "[OK] Updates downloaded successfully" >> "$LOG"
 
-    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
-        sudo -u "$CURRENT_USER" osascript -e 'display dialog "macOS updates are ready to install.
+    run_as_user osascript -e "display dialog \"macOS updates are ready to install.
 
-Go to System Settings > General > Software Update" with title "macOS Update Ready" buttons {"Open Settings", "Later"} default button "Open Settings"' 2>/dev/null
+Go to System Settings > General > Software Update to install.
 
-        if [ $? -eq 0 ]; then
-            sudo -u "$CURRENT_USER" open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>/dev/null
-        fi
+Your Mac will restart during installation.\" with title \"macOS Update Ready\" buttons {\"Open Settings\", \"Later\"} default button \"Open Settings\"" 2>&1 >> "$LOG"
+
+    if [ $? -eq 0 ]; then
+        run_as_user open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>&1 >> "$LOG"
     fi
 else
     echo "[ERROR] Download may have failed - exit code: $EXIT_CODE" >> "$LOG"
-
-    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ] && [ "$CURRENT_USER" != "loginwindow" ]; then
-        sudo -u "$CURRENT_USER" osascript -e 'display notification "macOS update download encountered an issue. Check with IT." with title "macOS Update"' 2>/dev/null
-    fi
+    run_as_user osascript -e 'display dialog "macOS update download encountered an issue. Please contact IT support." with title "macOS Update Error" buttons {"OK"} default button "OK"' 2>&1 >> "$LOG"
 fi
 
-# Clean up - remove the LaunchDaemon after completion
+# Clean up
+echo "[INFO] Cleaning up..." >> "$LOG"
 launchctl unload /Library/LaunchDaemons/com.force-macos-update.download.plist 2>/dev/null
 rm -f /Library/LaunchDaemons/com.force-macos-update.download.plist 2>/dev/null
 rm -f /usr/local/bin/force-macos-update-download.sh 2>/dev/null
-
-echo "[INFO] Cleanup complete" >> "$LOG"
+echo "[OK] Cleanup complete" >> "$LOG"
 DOWNLOADSCRIPT
 
 chmod +x "$DOWNLOAD_SCRIPT"
@@ -207,47 +262,60 @@ cat > "$LAUNCHDAEMON_PLIST" << EOF
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$DOWNLOAD_SCRIPT</string>
+        <string>/usr/local/bin/force-macos-update-download.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>LaunchOnlyOnce</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/force-macos-update-download.log</string>
+    <string>/var/log/force-macos-update-daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/force-macos-update-download.log</string>
+    <string>/var/log/force-macos-update-daemon.log</string>
 </dict>
 </plist>
 EOF
 
 chmod 644 "$LAUNCHDAEMON_PLIST"
 chown root:wheel "$LAUNCHDAEMON_PLIST"
-log "[OK] LaunchDaemon created at $LAUNCHDAEMON_PLIST"
+log "[OK] LaunchDaemon plist created"
 
-# Load and start the LaunchDaemon
-log "[INFO] Loading LaunchDaemon to start download..."
+# Load the LaunchDaemon
+log "[INFO] Loading LaunchDaemon..."
 launchctl load "$LAUNCHDAEMON_PLIST" 2>&1 | tee -a "$LOG"
+LOAD_RESULT=$?
+log "[INFO] launchctl load exit code: $LOAD_RESULT"
 
-# Verify it started
 sleep 2
+
+# Verify it's running
 if launchctl list | grep -q "com.force-macos-update.download"; then
-    log "[OK] LaunchDaemon loaded successfully - download starting"
+    log "[OK] LaunchDaemon is running"
 else
-    log "[WARN] LaunchDaemon may not have loaded - attempting direct start..."
+    log "[WARN] LaunchDaemon not in list - trying direct start..."
     launchctl start com.force-macos-update.download 2>&1 | tee -a "$LOG"
+    sleep 1
+    if launchctl list | grep -q "com.force-macos-update.download"; then
+        log "[OK] LaunchDaemon started after retry"
+    else
+        log "[ERROR] LaunchDaemon failed to start - running download directly..."
+        /bin/bash "$DOWNLOAD_SCRIPT" &
+        log "[INFO] Started download script directly (PID: $!)"
+    fi
 fi
 
 # --- FINAL STATUS ---
 log ""
 log "=== Script Complete: $(date) ==="
-log "[INFO] Download running via LaunchDaemon"
-log "[INFO] Monitor progress: tail -f $DOWNLOAD_LOG"
 log ""
 log "=== Summary ==="
 log "macOS Version: $CURRENT_VERSION"
-log "Current User: $CURRENT_USER"
+log "Console User: $CURRENT_USER (UID: $CURRENT_USER_UID)"
 log "Main Log: $LOG"
 log "Download Log: $DOWNLOAD_LOG"
+log "Daemon Log: /var/log/force-macos-update-daemon.log"
+log ""
+log "[INFO] Download is running in background via LaunchDaemon"
+log "[INFO] To monitor: tail -f /var/log/force-macos-update-download.log"
 
 exit 0
