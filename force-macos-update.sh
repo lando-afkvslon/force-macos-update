@@ -196,12 +196,31 @@ echo "$AVAILABLE" >> "$LOG"
 
 if echo "$AVAILABLE" | grep -q "No new software available"; then
     echo "" >> "$LOG"
-    echo "[INFO] Downloading full macOS installer..." >> "$LOG"
-    echo "" >> "$LOG"
+    echo "[INFO] Listing available macOS installers..." >> "$LOG"
 
-    # Download full installer
-    softwareupdate --fetch-full-installer 2>&1 | tee -a "$LOG"
-    EXIT_CODE=${PIPESTATUS[0]}
+    # List available full installers and find the latest version
+    INSTALLER_LIST=$(softwareupdate --list-full-installers 2>&1)
+    echo "$INSTALLER_LIST" >> "$LOG"
+
+    # Get the highest version number (latest macOS)
+    LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+
+    if [ -n "$LATEST_VERSION" ]; then
+        echo "" >> "$LOG"
+        echo "[INFO] Latest available version: $LATEST_VERSION" >> "$LOG"
+        echo "[INFO] Downloading macOS $LATEST_VERSION installer..." >> "$LOG"
+        echo "" >> "$LOG"
+
+        # Download the specific latest version
+        softwareupdate --fetch-full-installer --full-installer-version "$LATEST_VERSION" 2>&1 | tee -a "$LOG"
+        EXIT_CODE=${PIPESTATUS[0]}
+    else
+        echo "" >> "$LOG"
+        echo "[WARN] Could not determine latest version, trying default..." >> "$LOG"
+        softwareupdate --fetch-full-installer 2>&1 | tee -a "$LOG"
+        EXIT_CODE=${PIPESTATUS[0]}
+    fi
+
     echo "" >> "$LOG"
     echo "[INFO] Download exit code: $EXIT_CODE" >> "$LOG"
 else
