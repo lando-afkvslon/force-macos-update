@@ -221,12 +221,19 @@ if echo "$AVAILABLE" | grep -q "No new software available"; then
     echo "" >> "$LOG"
     echo "[INFO] Listing available macOS installers..." >> "$LOG"
 
-    # List available full installers and find the latest version
+    # List available full installers and find the latest NON-DEFERRED version
     INSTALLER_LIST=$(softwareupdate --list-full-installers 2>&1)
     echo "$INSTALLER_LIST" >> "$LOG"
 
-    # Get the highest version number (latest macOS)
-    LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+    # Get the highest version that is NOT deferred (Deferred: NO)
+    # First try to get latest Tahoe that's not deferred
+    LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep "Deferred: NO" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+
+    # If no non-deferred found, try any version
+    if [ -z "$LATEST_VERSION" ]; then
+        LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+        echo "[WARN] No non-deferred versions found, trying: $LATEST_VERSION" >> "$LOG"
+    fi
 
     if [ -n "$LATEST_VERSION" ]; then
         echo "" >> "$LOG"
