@@ -54,18 +54,6 @@ sudo ./force-macos-update.sh
 - Internet connection
 - Sufficient disk space (~15-25GB for full installer)
 
-## Log File
-
-All output is logged to:
-```
-/var/log/force-macos-update.log
-```
-
-View logs with:
-```bash
-cat /var/log/force-macos-update.log
-```
-
 ## After Running
 
 ### If incremental updates were found:
@@ -81,10 +69,17 @@ cat /var/log/force-macos-update.log
 
 ## Notes
 
+- **Downloads run in background** to avoid MDM timeout - script returns immediately
 - Full installer download may take 30-60 minutes depending on connection speed
 - Full installers require ~15-25GB of free disk space
 - The Mac will **not** restart automatically - user must initiate install
 - For major version upgrades, the full installer method is more reliable than waiting for Software Update
+- User gets a macOS notification when download completes
+
+## Log Files
+
+- Main log: `/var/log/force-macos-update.log`
+- Download progress: `/var/log/force-macos-update-download.log`
 
 ## License
 
