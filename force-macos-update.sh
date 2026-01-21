@@ -48,6 +48,74 @@ log "[INFO] Current user: $CURRENT_USER"
 CURRENT_VERSION=$(sw_vers -productVersion)
 log "[INFO] Current macOS version: $CURRENT_VERSION"
 
+# --- REMOVE UPDATE BLOCKERS AND RESTRICTIONS ---
+log "[INFO] Checking for update blockers and restrictions..."
+
+# List current profiles
+log "[INFO] Current configuration profiles:"
+PROFILES=$(profiles list 2>&1)
+log "$PROFILES"
+
+# Remove Software Update restriction profiles (if removable)
+log "[INFO] Attempting to remove Software Update restriction profiles..."
+profiles list 2>/dev/null | grep -i "softwareupdate\|update\|defer\|restrict" | while read -r line; do
+    PROFILE_ID=$(echo "$line" | awk -F'profileIdentifier: ' '{print $2}' | awk '{print $1}')
+    if [ -n "$PROFILE_ID" ]; then
+        log "[INFO] Attempting to remove profile: $PROFILE_ID"
+        profiles remove -identifier "$PROFILE_ID" 2>&1 | tee -a "$LOG" || true
+    fi
+done
+
+# Remove deferral settings
+log "[INFO] Removing update deferral settings..."
+defaults delete /Library/Preferences/com.apple.applicationaccess forceDelayedSoftwareUpdates 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess enforcedSoftwareUpdateDelay 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess forceDelayedMajorSoftwareUpdates 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess enforcedSoftwareUpdateMajorOSDeferredInstallDelay 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess forceDelayedAppSoftwareUpdates 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess enforcedSoftwareUpdateMinorOSDeferredInstallDelay 2>/dev/null || true
+log "[OK] Deferral settings cleared"
+
+# Remove restrictions on major OS upgrades
+log "[INFO] Removing major OS upgrade restrictions..."
+defaults delete /Library/Preferences/com.apple.applicationaccess restrictOSUpdatesToAdminUsers 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.applicationaccess allowMajorOSUpgrade 2>/dev/null || true
+defaults write /Library/Preferences/com.apple.applicationaccess allowMajorOSUpgrade -bool true 2>/dev/null || true
+
+# Remove Software Update restrictions
+log "[INFO] Removing Software Update restrictions..."
+defaults delete /Library/Preferences/com.apple.SoftwareUpdate RestrictSoftwareUpdateRequireAdminToInstall 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.SoftwareUpdate ManagedInstalls 2>/dev/null || true
+defaults delete /Library/Preferences/com.apple.SoftwareUpdate DisableSoftwareUpdateCatalogURL 2>/dev/null || true
+
+# Reset catalog URL to Apple default (remove any custom/blocking catalog)
+log "[INFO] Resetting Software Update catalog URL to Apple default..."
+defaults delete /Library/Preferences/com.apple.SoftwareUpdate CatalogURL 2>/dev/null || true
+
+# Remove any MDM blocking keys
+log "[INFO] Removing MDM update blocking keys..."
+defaults delete /Library/Managed\ Preferences/com.apple.SoftwareUpdate 2>/dev/null || true
+defaults delete /Library/Managed\ Preferences/com.apple.applicationaccess 2>/dev/null || true
+
+# Enable automatic updates (in case they were disabled)
+log "[INFO] Enabling automatic update checks..."
+defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true 2>/dev/null || true
+defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true 2>/dev/null || true
+defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool true 2>/dev/null || true
+
+# Remove any update blocking launch daemons/agents
+log "[INFO] Checking for update blocking launch daemons..."
+for plist in /Library/LaunchDaemons/*update*block*.plist /Library/LaunchAgents/*update*block*.plist; do
+    if [ -f "$plist" ]; then
+        log "[INFO] Found potential blocker: $plist"
+        launchctl unload "$plist" 2>/dev/null || true
+        rm -f "$plist" 2>/dev/null || true
+        log "[OK] Removed: $plist"
+    fi
+done
+
+log "[OK] Update blockers check complete"
+
 # --- CLEAR ALL UPDATE CACHES ---
 log "[INFO] Clearing Software Update caches..."
 rm -rf /Library/Updates/* 2>/dev/null || true
