@@ -1,6 +1,6 @@
 #!/bin/bash
 # Force macOS to Check and Download Latest Updates
-# Fixes "No updates available" when updates actually exist
+# Supports major version upgrades (e.g., Sequoia → Tahoe)
 # For deployment via Rippling MDM
 
 LOG="/var/log/force-macos-update.log"
@@ -9,6 +9,7 @@ echo "=== Force macOS Update Started: $(date) ==="
 
 # Get current macOS version
 CURRENT_VERSION=$(sw_vers -productVersion)
+CURRENT_MAJOR=$(echo "$CURRENT_VERSION" | cut -d. -f1)
 echo "[INFO] Current macOS version: $CURRENT_VERSION"
 
 # --- CLEAR ALL UPDATE CACHES ---
@@ -48,10 +49,33 @@ AVAILABLE=$(softwareupdate -l 2>&1)
 echo "$AVAILABLE"
 echo ""
 
-# --- DOWNLOAD UPDATES ---
+# --- DOWNLOAD UPDATES OR FETCH FULL INSTALLER ---
 if echo "$AVAILABLE" | grep -q "No new software available"; then
-    echo "[INFO] No updates found after refresh"
-    echo "[INFO] This Mac may already be on the latest version"
+    echo "[INFO] No incremental updates found"
+    echo "[INFO] Attempting to fetch latest full macOS installer..."
+    echo "[INFO] This is required for major version upgrades (e.g., Sequoia → Tahoe)"
+    echo ""
+
+    # Fetch the latest available full installer
+    # This downloads the complete macOS installer to /Applications
+    echo "[INFO] Downloading full macOS installer (this may take 30-60 minutes)..."
+    softwareupdate --fetch-full-installer 2>&1
+
+    # Check if installer was downloaded
+    INSTALLER=$(ls -d /Applications/Install\ macOS*.app 2>/dev/null | head -1)
+    if [ -n "$INSTALLER" ]; then
+        echo ""
+        echo "[OK] Full installer downloaded successfully!"
+        echo "[INFO] Installer location: $INSTALLER"
+        echo ""
+        echo "[INFO] To install, user can either:"
+        echo "       1. Open the installer app in /Applications"
+        echo "       2. Or run: sudo \"$INSTALLER/Contents/Resources/startosinstall\" --agreetolicense"
+    else
+        echo ""
+        echo "[WARN] Could not verify installer download"
+        echo "[INFO] Check /Applications for 'Install macOS' app"
+    fi
 else
     echo "[INFO] Updates found! Starting download..."
     echo "[INFO] This may take a while depending on update size and connection speed"
@@ -73,3 +97,4 @@ echo "[INFO] Log saved to: $LOG"
 echo ""
 echo "=== Force Update Complete: $(date) ==="
 echo "[INFO] User can now install via System Settings > General > Software Update"
+echo "[INFO] Or open the installer in /Applications if a full installer was downloaded"

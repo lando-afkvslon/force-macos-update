@@ -1,6 +1,6 @@
 # Force macOS Update
 
-A script to force macOS to check for and download the latest OS updates, even when "No new software available" is incorrectly displayed.
+A script to force macOS to check for and download the latest OS updates, including **major version upgrades** (e.g., Sequoia → Tahoe).
 
 ## The Problem
 
@@ -8,6 +8,7 @@ macOS sometimes fails to detect available updates due to:
 - Stale Software Update cache
 - Corrupted catalog data
 - Previously ignored updates
+- Major version upgrades not appearing in normal update checks
 - DNS or connectivity caching issues
 
 This results in "No new software available" even when newer macOS versions exist.
@@ -21,7 +22,7 @@ This results in "No new software available" even when newer macOS versions exist
 5. Clears and refreshes the update catalog
 6. Flushes DNS cache
 7. Forces a fresh check for updates
-8. **Downloads all available updates** (does NOT auto-install)
+8. If no incremental updates found, **downloads the full macOS installer** using `--fetch-full-installer`
 9. Logs all actions to `/var/log/force-macos-update.log`
 
 ## Usage
@@ -51,6 +52,7 @@ sudo ./force-macos-update.sh
 - macOS 10.15 (Catalina) or later
 - Administrator/root privileges
 - Internet connection
+- Sufficient disk space (~15-25GB for full installer)
 
 ## Log File
 
@@ -66,16 +68,23 @@ cat /var/log/force-macos-update.log
 
 ## After Running
 
-1. The script downloads updates but does **not** install them automatically
+### If incremental updates were found:
+1. Updates are downloaded but **not** installed automatically
 2. User opens **System Settings > General > Software Update**
-3. The update should appear ready to install
-4. User clicks "Install" to complete the update
+3. Click "Install" to complete the update
+
+### If full installer was downloaded (major version upgrade):
+1. The installer app appears in `/Applications` (e.g., "Install macOS Tahoe.app")
+2. User can either:
+   - Open the installer app directly
+   - Or the script provides a command to start installation
 
 ## Notes
 
-- Download time depends on update size and connection speed
-- Large updates (e.g., major macOS versions) may take 20-60 minutes to download
+- Full installer download may take 30-60 minutes depending on connection speed
+- Full installers require ~15-25GB of free disk space
 - The Mac will **not** restart automatically - user must initiate install
+- For major version upgrades, the full installer method is more reliable than waiting for Software Update
 
 ## License
 
