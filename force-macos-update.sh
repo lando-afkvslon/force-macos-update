@@ -161,7 +161,13 @@ cat > "$DOWNLOAD_SCRIPT" << 'DOWNLOADSCRIPT'
 #!/bin/bash
 LOG="/var/log/force-macos-update-download.log"
 
+# Prevent Mac from sleeping during download
+caffeinate -d -i -m -s &
+CAFFEINATE_PID=$!
+trap "kill $CAFFEINATE_PID 2>/dev/null" EXIT
+
 echo "=== macOS Update Download Started: $(date) ===" > "$LOG"
+echo "[INFO] Caffeinate enabled - Mac will not sleep during download" >> "$LOG"
 echo "[INFO] Running as: $(whoami) (UID: $(id -u))" >> "$LOG"
 
 # Get current console user and UID
