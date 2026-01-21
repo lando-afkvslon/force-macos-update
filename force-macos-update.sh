@@ -7,13 +7,42 @@
 LOG="/var/log/force-macos-update.log"
 DOWNLOAD_LOG="/var/log/force-macos-update-download.log"
 
+# Get current logged-in user
+CURRENT_USER=$(stat -f "%Su" /dev/console)
+
 # Function to log to both stdout (for Rippling) and log file
 log() {
     echo "$1"
     echo "$1" >> "$LOG"
 }
 
+# Function to notify the user
+notify_user() {
+    local title="$1"
+    local message="$2"
+    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
+        sudo -u "$CURRENT_USER" osascript -e "display notification \"$message\" with title \"$title\"" 2>/dev/null
+    fi
+}
+
+# Function to show alert dialog to user
+show_alert() {
+    local title="$1"
+    local message="$2"
+    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
+        sudo -u "$CURRENT_USER" osascript -e "display dialog \"$message\" with title \"$title\" buttons {\"OK\"} default button \"OK\" giving up after 10" 2>/dev/null &
+    fi
+}
+
+# Function to open System Settings
+open_software_update() {
+    if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
+        sudo -u "$CURRENT_USER" open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>/dev/null
+    fi
+}
+
 log "=== Force macOS Update Started: $(date) ==="
+log "[INFO] Current user: $CURRENT_USER"
 
 # Get current macOS version
 CURRENT_VERSION=$(sw_vers -productVersion)
@@ -71,9 +100,28 @@ if echo "$AVAILABLE" | grep -q "No new software available"; then
     log "[INFO] Download progress logged to: $DOWNLOAD_LOG"
     log "[INFO] Download will take 30-60 minutes depending on connection speed"
 
+    # Notify user that download is starting
+    notify_user "macOS Update" "Downloading macOS upgrade. This may take 30-60 minutes. Please keep your Mac on and connected to the internet."
+
+    # Show alert dialog so user definitely sees it
+    show_alert "macOS Update Starting" "Your IT department is downloading a macOS upgrade to your computer.
+
+This download will take 30-60 minutes. Please:
+• Keep your Mac powered on
+• Stay connected to the internet
+• Do not shut down or restart
+
+You will be notified when the download is complete."
+
+    # Open System Settings to Software Update
+    log "[INFO] Opening System Settings > Software Update for user visibility"
+    open_software_update
+
     # Run the full installer download in background with nohup
     nohup bash -c '
         LOG="/var/log/force-macos-update-download.log"
+        CURRENT_USER="'"$CURRENT_USER"'"
+
         echo "=== Full Installer Download Started: $(date) ===" > "$LOG"
         echo "[INFO] Downloading latest macOS installer..." >> "$LOG"
 
@@ -88,15 +136,34 @@ if echo "$AVAILABLE" | grep -q "No new software available"; then
         INSTALLER=$(ls -d /Applications/Install\ macOS*.app 2>/dev/null | head -1)
         if [ -n "$INSTALLER" ]; then
             echo "[OK] SUCCESS - Installer downloaded: $INSTALLER" >> "$LOG"
+            INSTALLER_NAME=$(basename "$INSTALLER" .app)
 
-            # Create a notification for the user
-            CURRENT_USER=$(stat -f "%Su" /dev/console)
+            # Notify user download is complete
             if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
-                sudo -u "$CURRENT_USER" osascript -e "display notification \"macOS upgrade is ready to install. Open the installer in Applications.\" with title \"macOS Update Ready\"" 2>/dev/null
+                sudo -u "$CURRENT_USER" osascript -e "display dialog \"macOS upgrade download complete!
+
+The installer is ready in your Applications folder.
+
+To upgrade:
+1. Open Finder > Applications
+2. Double-click '"'"'$INSTALLER_NAME'"'"'
+3. Follow the on-screen instructions
+
+Your Mac will restart during the upgrade.\" with title \"macOS Update Ready\" buttons {\"Open Applications\", \"Later\"} default button \"Open Applications\"" 2>/dev/null
+
+                # If user clicks "Open Applications", open Finder to Applications
+                if [ $? -eq 0 ]; then
+                    sudo -u "$CURRENT_USER" open /Applications 2>/dev/null
+                fi
             fi
         else
             echo "[ERROR] FAILED - No installer found in /Applications" >> "$LOG"
             echo "[ERROR] Check if there is enough disk space (~15-25GB required)" >> "$LOG"
+
+            # Notify user of failure
+            if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
+                sudo -u "$CURRENT_USER" osascript -e "display notification \"Download failed. Please contact IT support.\" with title \"macOS Update Error\"" 2>/dev/null
+            fi
         fi
     ' > /dev/null 2>&1 &
 
@@ -105,15 +172,24 @@ if echo "$AVAILABLE" | grep -q "No new software available"; then
     log ""
     log "=== Script Complete: $(date) ==="
     log "[INFO] Download running in background - will continue after script exits"
-    log "[INFO] User will receive notification when download completes"
+    log "[INFO] User has been notified and System Settings opened"
     log "[INFO] Check download progress: cat $DOWNLOAD_LOG"
 else
     log "[INFO] Incremental updates found!"
     log "[INFO] Starting background download..."
 
+    # Notify user
+    notify_user "macOS Update" "Downloading macOS updates. You will be notified when ready to install."
+
+    # Open System Settings to Software Update so user can see progress
+    log "[INFO] Opening System Settings > Software Update for user visibility"
+    open_software_update
+
     # Run incremental update download in background
     nohup bash -c '
         LOG="/var/log/force-macos-update-download.log"
+        CURRENT_USER="'"$CURRENT_USER"'"
+
         echo "=== Update Download Started: $(date) ===" > "$LOG"
         softwareupdate --download --all --force >> "$LOG" 2>&1
         EXIT_CODE=$?
@@ -122,9 +198,16 @@ else
         echo "[INFO] Exit code: $EXIT_CODE" >> "$LOG"
 
         # Notify user
-        CURRENT_USER=$(stat -f "%Su" /dev/console)
         if [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ]; then
-            sudo -u "$CURRENT_USER" osascript -e "display notification \"macOS updates are ready to install in System Settings.\" with title \"macOS Update Ready\"" 2>/dev/null
+            sudo -u "$CURRENT_USER" osascript -e "display dialog \"macOS updates are downloaded and ready to install.
+
+Go to System Settings > General > Software Update to install.
+
+Your Mac will restart during installation.\" with title \"macOS Update Ready\" buttons {\"Open Software Update\", \"Later\"} default button \"Open Software Update\"" 2>/dev/null
+
+            if [ $? -eq 0 ]; then
+                sudo -u "$CURRENT_USER" open "x-apple.systempreferences:com.apple.Software-Update-Settings.extension" 2>/dev/null
+            fi
         fi
     ' > /dev/null 2>&1 &
 
@@ -133,12 +216,13 @@ else
     log ""
     log "=== Script Complete: $(date) ==="
     log "[INFO] Updates downloading in background"
-    log "[INFO] User will receive notification when ready"
+    log "[INFO] User has been notified and System Settings opened"
 fi
 
 log ""
 log "=== Summary ==="
 log "macOS Version: $CURRENT_VERSION"
+log "Current User: $CURRENT_USER"
 log "Main Log: $LOG"
 log "Download Log: $DOWNLOAD_LOG"
 
