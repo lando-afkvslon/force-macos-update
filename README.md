@@ -1,86 +1,125 @@
-# Force macOS Update
+# Force macOS Update Script
 
-A script to force macOS to check for and download the latest OS updates, including **major version upgrades** (e.g., Sequoia → Tahoe).
+A script to force macOS devices to download and prepare the latest OS update (e.g., Sequoia → Tahoe), designed for deployment via Rippling MDM.
 
-## The Problem
+## Quick Reference
 
-macOS sometimes fails to detect available updates due to:
-- Stale Software Update cache
-- Corrupted catalog data
-- Previously ignored updates
-- Major version upgrades not appearing in normal update checks
-- DNS or connectivity caching issues
-
-This results in "No new software available" even when newer macOS versions exist.
-
-## What This Script Does
-
-1. Clears all Software Update caches
-2. Resets Software Update preferences
-3. Removes any ignored updates
-4. Restarts the `softwareupdated` daemon
-5. Clears and refreshes the update catalog
-6. Flushes DNS cache
-7. Forces a fresh check for updates
-8. If no incremental updates found, **downloads the full macOS installer** using `--fetch-full-installer`
-9. Logs all actions to `/var/log/force-macos-update.log`
-
-## Usage
-
-### For Rippling MDM (Recommended)
-
-**Option 1: Download and execute**
+### Rippling Command
 ```bash
 cd /tmp && curl -fsSO https://raw.githubusercontent.com/lando-afkvslon/force-macos-update/main/force-macos-update.sh && /bin/bash force-macos-update.sh && rm force-macos-update.sh
 ```
 
-**Option 2: One-liner with pipe**
+### GitHub Repository
+https://github.com/lando-afkvslon/force-macos-update
+
+## What This Script Does
+
+1. **Removes update blockers** - Clears deferral settings, restrictions, and resets update preferences
+2. **Clears update caches** - Removes stale update data that can cause "no updates available"
+3. **Restarts update daemon** - Refreshes the softwareupdated service
+4. **Lists available installers** - Shows all macOS versions available from Apple
+5. **Downloads latest non-deferred version** - Gets the newest macOS that isn't being held back
+6. **Shows progress to user** - Opens a Terminal window with live download progress
+7. **Prevents sleep** - Uses caffeinate to keep Mac awake during download
+8. **Notifies user when done** - Shows dialog with instructions to install
+
+## Log Files (on target Mac)
+
+| Log | Purpose |
+|-----|---------|
+| `/var/log/force-macos-update.log` | Main script output |
+| `/var/log/force-macos-update-download.log` | Download progress and status |
+| `/var/log/force-macos-update-daemon.log` | LaunchDaemon output |
+
+### View logs on Mac:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lando-afkvslon/force-macos-update/main/force-macos-update.sh | /bin/bash
+cat /var/log/force-macos-update.log
+cat /var/log/force-macos-update-download.log
 ```
 
-### Manual Download and Run
-
+### Watch download progress live:
 ```bash
-curl -O https://raw.githubusercontent.com/lando-afkvslon/force-macos-update/main/force-macos-update.sh
-chmod +x force-macos-update.sh
-sudo ./force-macos-update.sh
+tail -f /var/log/force-macos-update-download.log
 ```
 
-## Requirements
+## After Download Completes
 
-- macOS 10.15 (Catalina) or later
-- Administrator/root privileges
-- Internet connection
-- Sufficient disk space (~15-25GB for full installer)
+The installer will be in `/Applications/Install macOS Tahoe.app`
 
-## After Running
+**User needs to:**
+1. Open Finder → Applications
+2. Double-click "Install macOS Tahoe"
+3. Follow prompts (Mac will restart)
 
-### If incremental updates were found:
-1. Updates are downloaded but **not** installed automatically
-2. User opens **System Settings > General > Software Update**
-3. Click "Install" to complete the update
+**Note:** If user doesn't have admin rights, they'll need IT to provide admin credentials to run the installer.
 
-### If full installer was downloaded (major version upgrade):
-1. The installer app appears in `/Applications` (e.g., "Install macOS Tahoe.app")
-2. User can either:
-   - Open the installer app directly
-   - Or the script provides a command to start installation
+## Troubleshooting
 
-## Notes
+### "No new software available"
+- Script handles this by using `--fetch-full-installer` instead
+- Check download log for available versions
 
-- **Downloads run in background** to avoid MDM timeout - script returns immediately
-- Full installer download may take 30-60 minutes depending on connection speed
-- Full installers require ~15-25GB of free disk space
-- The Mac will **not** restart automatically - user must initiate install
-- For major version upgrades, the full installer method is more reliable than waiting for Software Update
-- User gets a macOS notification when download completes
+### "Update not available" / "Deferred: YES"
+- Apple is holding back that version
+- Script automatically picks latest non-deferred version
 
-## Log Files
+### Terminal window doesn't open
+- Check if LaunchAgent loaded: `launchctl list | grep force-macos`
+- Progress still works in background, check download log
 
-- Main log: `/var/log/force-macos-update.log`
-- Download progress: `/var/log/force-macos-update-download.log`
+### Download stuck
+- Check if caffeinate is running: `ps aux | grep caffeinate`
+- Check download log for progress percentage
+- Large downloads (~16GB) take 30-60 minutes
 
-## License
+### Permission errors (-1743)
+- Fixed in latest version using LaunchAgent instead of AppleScript
 
-MIT License - Use at your own risk.
+## Modifying the Script
+
+### To target a specific macOS version:
+
+Edit `force-macos-update.sh` and find this section:
+```bash
+# Get the highest version that is NOT deferred (Deferred: NO)
+LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep "Deferred: NO" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+```
+
+Replace with a hardcoded version:
+```bash
+LATEST_VERSION="26.1"
+```
+
+Then commit and push:
+```bash
+git add -A && git commit -m "Target specific version" && git push
+```
+
+### To see available versions:
+Run on any Mac:
+```bash
+softwareupdate --list-full-installers
+```
+
+## File Structure
+
+```
+/Users/orlando/force-macos-update/
+├── README.md                 # This file
+├── force-macos-update.sh     # Main script
+├── QUICK-REFERENCE.md        # One-page cheat sheet
+└── .git/                     # Git repo (synced to GitHub)
+```
+
+## Version History
+
+- **Jan 2026** - Initial release
+  - Supports Sequoia → Tahoe upgrade
+  - Handles deferred versions
+  - Terminal progress window
+  - LaunchDaemon for persistent download
+  - Caffeinate to prevent sleep
+
+## Contact
+
+For issues: https://github.com/lando-afkvslon/force-macos-update/issues
