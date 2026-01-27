@@ -221,38 +221,75 @@ if echo "$AVAILABLE" | grep -q "No new software available"; then
     echo "" >> "$LOG"
     echo "[INFO] Listing available macOS installers..." >> "$LOG"
 
-    # List available full installers and find the latest NON-DEFERRED version
+    # List available full installers
     INSTALLER_LIST=$(softwareupdate --list-full-installers 2>&1)
     echo "$INSTALLER_LIST" >> "$LOG"
 
-    # Get the highest version that is NOT deferred (Deferred: NO)
-    # First try to get latest Tahoe that's not deferred
-    LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep "Deferred: NO" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
+    # Get latest Tahoe (26.x) that's not deferred
+    TAHOE_VERSION=$(echo "$INSTALLER_LIST" | grep "Deferred: NO" | grep -o 'Version: 26[0-9.]*' | head -1 | awk '{print $2}')
 
-    # If no non-deferred found, try any version
-    if [ -z "$LATEST_VERSION" ]; then
-        LATEST_VERSION=$(echo "$INSTALLER_LIST" | grep -o 'Version: [0-9.]*' | head -1 | awk '{print $2}')
-        echo "[WARN] No non-deferred versions found, trying: $LATEST_VERSION" >> "$LOG"
+    # Get latest Sequoia (15.x) as fallback
+    SEQUOIA_VERSION=$(echo "$INSTALLER_LIST" | grep "Deferred: NO" | grep -o 'Version: 15[0-9.]*' | head -1 | awk '{print $2}')
+
+    echo "" >> "$LOG"
+    echo "[INFO] Available: Tahoe=$TAHOE_VERSION, Sequoia=$SEQUOIA_VERSION" >> "$LOG"
+
+    # Function to attempt download with retries
+    attempt_download() {
+        local VERSION="$1"
+        local MAX_ATTEMPTS=2
+
+        for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "[INFO] Downloading macOS $VERSION (attempt $attempt of $MAX_ATTEMPTS)..." >> "$LOG"
+            softwareupdate --fetch-full-installer --full-installer-version "$VERSION" 2>&1 | tee -a "$LOG"
+            local RESULT=${PIPESTATUS[0]}
+
+            if [ $RESULT -eq 0 ]; then
+                return 0
+            fi
+
+            echo "[WARN] Attempt $attempt failed (exit code: $RESULT)" >> "$LOG"
+            if [ $attempt -lt $MAX_ATTEMPTS ]; then
+                echo "[INFO] Retrying in 15 seconds..." >> "$LOG"
+                sleep 15
+            fi
+        done
+        return 1
+    }
+
+    EXIT_CODE=1
+
+    # Try Tahoe first
+    if [ -n "$TAHOE_VERSION" ]; then
+        echo "" >> "$LOG"
+        echo "[INFO] Attempting Tahoe ($TAHOE_VERSION) first..." >> "$LOG"
+        if attempt_download "$TAHOE_VERSION"; then
+            EXIT_CODE=0
+        else
+            echo "[WARN] Tahoe download failed, will try Sequoia fallback..." >> "$LOG"
+        fi
     fi
 
-    if [ -n "$LATEST_VERSION" ]; then
+    # If Tahoe failed or unavailable, try Sequoia as fallback
+    if [ $EXIT_CODE -ne 0 ] && [ -n "$SEQUOIA_VERSION" ]; then
         echo "" >> "$LOG"
-        echo "[INFO] Latest available version: $LATEST_VERSION" >> "$LOG"
-        echo "[INFO] Downloading macOS $LATEST_VERSION installer..." >> "$LOG"
-        echo "" >> "$LOG"
+        echo "[INFO] Falling back to Sequoia ($SEQUOIA_VERSION)..." >> "$LOG"
+        if attempt_download "$SEQUOIA_VERSION"; then
+            EXIT_CODE=0
+            echo "[INFO] Sequoia downloaded. Run this script again after install to get Tahoe." >> "$LOG"
+        fi
+    fi
 
-        # Download the specific latest version
-        softwareupdate --fetch-full-installer --full-installer-version "$LATEST_VERSION" 2>&1 | tee -a "$LOG"
-        EXIT_CODE=${PIPESTATUS[0]}
-    else
+    # Last resort: try default
+    if [ $EXIT_CODE -ne 0 ]; then
         echo "" >> "$LOG"
-        echo "[WARN] Could not determine latest version, trying default..." >> "$LOG"
+        echo "[WARN] Both versions failed, trying default installer..." >> "$LOG"
         softwareupdate --fetch-full-installer 2>&1 | tee -a "$LOG"
         EXIT_CODE=${PIPESTATUS[0]}
     fi
 
     echo "" >> "$LOG"
-    echo "[INFO] Download exit code: $EXIT_CODE" >> "$LOG"
+    echo "[INFO] Final download exit code: $EXIT_CODE" >> "$LOG"
 else
     echo "" >> "$LOG"
     echo "[INFO] Downloading incremental updates..." >> "$LOG"
