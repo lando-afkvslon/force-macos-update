@@ -22,11 +22,12 @@ cd /tmp && curl -fsSO https://raw.githubusercontent.com/lando-afkvslon/force-mac
 3. Clears Software Update caches
 4. Restarts softwareupdated daemon
 5. Lists available installers via `softwareupdate --list-full-installers`
-6. Downloads latest **non-deferred** version via `softwareupdate --fetch-full-installer --full-installer-version X.X`
-7. Opens Terminal window showing live download progress (via LaunchAgent)
-8. Uses caffeinate to prevent sleep during download
-9. Shows completion dialog when done
-10. Installer lands in `/Applications/Install macOS [Name].app`
+6. **Tries Tahoe (26.x) first** with retry logic (2 attempts)
+7. **Falls back to Sequoia (15.x)** if Tahoe fails to authenticate
+8. Opens Terminal window showing live download progress (via LaunchAgent)
+9. Uses caffeinate to prevent sleep during download
+10. Shows completion dialog when done
+11. Installer lands in `/Applications/Install macOS [Name].app`
 
 ## Technical Solutions Implemented
 
@@ -39,6 +40,17 @@ cd /tmp && curl -fsSO https://raw.githubusercontent.com/lando-afkvslon/force-mac
 | User can't see progress | Terminal window with `tail -f` on log |
 | Mac sleeps during download | caffeinate keeps it awake |
 | Automation permission error (-1743) | LaunchAgent instead of AppleScript |
+| "Failed to authenticate" error | Retry logic (2 attempts per version, 15s delay) |
+| Some Macs can't jump to Tahoe | Auto-fallback to Sequoia, then re-run for Tahoe |
+
+## Download Flow
+```
+Try Tahoe (26.x) → retry once if fails
+    ↓ (if still fails)
+Try Sequoia (15.x) → retry once if fails
+    ↓ (if still fails)
+Try default installer
+```
 
 ## Log Files (on target Mac)
 - `/var/log/force-macos-update.log` - Main script
@@ -50,11 +62,16 @@ cd /tmp && curl -fsSO https://raw.githubusercontent.com/lando-afkvslon/force-mac
 1. Edit `/Users/orlando/force-macos-update/force-macos-update.sh`
 2. Commit and push: `git add -A && git commit -m "change" && git push`
 
-### Target specific version:
-Find `LATEST_VERSION=...` line and replace with:
+### Force a specific version only:
+Find the `attempt_download` calls and replace with hardcoded version:
 ```bash
-LATEST_VERSION="26.1"
+attempt_download "26.1"  # Force Tahoe 26.1
+# or
+attempt_download "15.3"  # Force Sequoia 15.3
 ```
 
 ## Created
 January 2026
+
+## Last Updated
+January 2026 - Added Tahoe-first with Sequoia fallback and retry logic
